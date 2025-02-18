@@ -1,26 +1,73 @@
 from models import *
-from fastapi import FastAPI, HTTPException, status
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    status,
+)
 import mariadb
-from mariadb import Cursor
+from mariadb import (
+    Cursor, 
+    Connection, 
+    IntegrityError, 
+    OperationalError
+)
+
+
+def exec_query(callback, send_conn = False):
+    conn = mariadb.connect(**conn_params)
+    cursor = conn.cursor()
+    
+    try:
+        callback(conn, cursor) if send_conn else callback(cursor)
+    except OperationalError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se puedo conectar con la base de datos"
+        )
+    except Exception as ex:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error interno del servidor: {ex}"
+        )
+    finally:
+        cursor.close()
+        conn.close()
+
+def exist(target_table: str, pk_name: str, pk_value) -> tuple | None:
+    def query(cursor: Cursor):
+        nonlocal data
+        cursor.execute(f"select * from {target_table} where {pk_name} = ?", (pk_value,))
+        data = cursor.fetchone()
+
+    data = None
+    exec_query(query)
+    return data
+
 
 def validate_authentication(user_id: int, passwd: str):
     def query(cursor: Cursor):
-        cursor.execute(f"select Name, IsAdmin from User where Name = {user_id} and Password = {passwd}")
-        response = cursor.fetchone()
+        nonlocal user
+        cursor.execute(f"select Name, IsAdmin from User where ID = ? and Password = ?", (user_id, passwd))
+        data = cursor.fetchone()
         
-        if (response):
-            user = User(id=user_id, name=response[0], is_admin=response[1])
+        if (data):
+            user = User(id=user_id, name=data[0], is_admin=data[1])
 
     user = None
     exec_query(query)
     return user
 
-def exec_query(callback):
-    conn = mariadb.connect(**conn_params)
-    cursor = conn.cursor()
-    callback(cursor)
-    cursor.close()
-    conn.close()
+def fetch_products(sql: str) -> list[Product]:
+    def query(cursor: Cursor):
+        cursor.execute(sql)
+        data = cursor.fetchall()
+
+        for product in data:
+            products.append(Product(name=product[0], price=product[1]))
+
+    products = list()
+    exec_query(query)
+    return products
 
 
 app = FastAPI()
@@ -31,31 +78,42 @@ async def root():
     return { "message": "El server funciona :)" }
 
 @app.post("/login")
-def login(user_id: int, password: str):
-    user = validate_authentication(user_id, password)
+def login(data: LoginRequest):
+    user = validate_authentication(data.user_id, data.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Acceso denegado"
+            detail="Usuario o contraseña incorrecta"
         )
-    return user
+    return { "token": user }
 
 @app.get("/products")
 async def get_products():
-    def query(cursor: Cursor):
-        cursor.execute("select * from Product")
-        data = cursor.fetchall()
-        
-        for product in data:
-            products.append(Product(name=product[0], price=product[1]))
-
-    products = list()
-    exec_query(query)
-    return products
+    return fetch_products("select * from Product")
 
 @app.post("/products/new")
 def create_product(product: Product):
-    pass
+    def query(conn: Connection, cursor: Cursor):
+        try:
+            cursor.execute(f"call Create_Product (?, ?)", (product.name, product.price))
+            conn.commit()
+            return { "message": "Producto creado exitosamente" }
+        
+        except IntegrityError:
+            conn.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Ya existe un producto con el mismo nombre"
+            )
+        
+        except Exception as ex:
+            conn.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Ocurrió un error al crear producto: {ex}",
+            )
+        
+    exec_query(query, True)
 
 @app.post("/products/delete")
 def rempve_product(product_name: str):
@@ -73,6 +131,31 @@ async def get_combos():
     combos = list()
     exec_query(query)
     return combos;
+
+@app.get("/combos/{combo_name}")
+def get_combo(combo_name: str):
+    def query(cursor: Cursor):
+        cursor.execute("call Read_ProductsFromCombo (?)", (combo_name,))
+        rows = cursor.fetchall()
+        
+        for row in rows:
+            products.append(
+                (Product(name=row[0], price=row[1]), row[2])
+            )
+
+    data = exist("Combo", "Name", combo_name)
+    
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"El combo '{combo_name}' no existe"
+        )
+    
+    products = list()
+    combo = Combo(name=data[0], price=data[1])
+    exec_query(query)
+    combo.products = products
+    return combo
 
 @app.post("/combos/new")
 def create_combo(combo: Combo):

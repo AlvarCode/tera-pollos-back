@@ -3,6 +3,11 @@ from typing import Optional
 from datetime import datetime
 
 
+class LoginRequest(BaseModel):
+    user_id: int
+    password: str
+
+
 class User(BaseModel):
     id: int
     name: str
@@ -17,7 +22,7 @@ class Product(BaseModel):
 class Combo(BaseModel):
     name: str
     price: float
-    products: Optional[list[Product]] = None
+    products: Optional[list[tuple[Product, int]]] = None
 
 
 class Sale(BaseModel):
