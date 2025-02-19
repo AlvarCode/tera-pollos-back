@@ -16,22 +16,9 @@ from mariadb import (
 def exec_query(callback, send_conn = False):
     conn = mariadb.connect(**conn_params)
     cursor = conn.cursor()
-    
-    try:
-        callback(conn, cursor) if send_conn else callback(cursor)
-    except OperationalError:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="No se puedo conectar con la base de datos"
-        )
-    except Exception as ex:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error interno del servidor: {ex}"
-        )
-    finally:
-        cursor.close()
-        conn.close()
+    callback(conn, cursor) if send_conn else callback(cursor)
+    cursor.close()
+    conn.close()
 
 def exist(target_table: str, pk_name: str, pk_value) -> tuple | None:
     def query(cursor: Cursor):
@@ -97,23 +84,23 @@ def create_product(product: Product):
         try:
             cursor.execute(f"call Create_Product (?, ?)", (product.name, product.price))
             conn.commit()
-            return { "message": "Producto creado exitosamente" }
-        
-        except IntegrityError:
+
+        except OperationalError:
             conn.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Ya existe un producto con el mismo nombre"
             )
-        
+            
         except Exception as ex:
             conn.rollback()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Ocurrió un error al crear producto: {ex}",
+                detail=f"Error interno del servidor: {ex}"
             )
         
     exec_query(query, True)
+    return { "message": "Producto creado exitosamente" }
 
 @app.post("/products/delete")
 def rempve_product(product_name: str):
