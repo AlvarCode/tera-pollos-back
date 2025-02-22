@@ -22,13 +22,16 @@ class Product(BaseModel):
 class Combo(BaseModel):
     name: str
     price: float
-    products: Optional[list[tuple[Product, int]]] = None
+    products: Optional[list[dict]] = None
 
 
 class Sale(BaseModel):
-    id: int
-    date: datetime
-    products: Optional[list[tuple[Product, int]]] = None
-    combos: Optional[list[tuple[Combo, int]]] = None
+    id: Optional[int]
+    date: Optional[datetime] = datetime.now()
     total: float
     seller_id: int
+
+
+class SaleDetail(Sale):
+    products: Optional[list[dict]] = None
+    combos: Optional[list[dict]] = None
